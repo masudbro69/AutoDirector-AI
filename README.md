@@ -34,7 +34,22 @@ cd server && npm install && npm start
 cd .. && npm install && npm run dev
 ```
 
-Engine API: `http://YOUR_PC_LAN_IP:8787`. Enter that address in the New Production screen. Android emulator may use `http://10.0.2.2:8787`. Phone and PC must be on the same network; allow TCP 8787 through the PC firewall.
+Engine API: `http://YOUR_PC_LAN_IP:8787`. Enter that address and the six-digit pairing code printed by the engine in the New Production screen. Android emulator may use `http://10.0.2.2:8787`. Phone and PC must be on the same trusted network; allow TCP 8787 through the PC firewall. Sessions use random 256-bit bearer tokens and are invalidated when the engine restarts. See [server/SECURITY.md](server/SECURITY.md).
+
+## Controller API
+
+- `POST /api/pair`
+- `POST /api/projects`
+- `POST /api/projects/:id/generate`
+- `GET /api/projects/:id`
+- `GET /api/projects/:id/progress`
+- `GET /api/projects/:id/logs`
+- `POST /api/projects/:id/cancel`
+- `GET /api/providers/health`
+- `GET /api/assets/:projectId/*`
+- `GET /api/projects/:id/export`
+
+Run `cd server && npm run smoke` while the engine is running to validate the engine endpoint, authenticated provider health, and a one-second FFmpeg render.
 
 Configuration: `OLLAMA_URL`, `OLLAMA_MODEL`, `COMFYUI_URL`, `COMFY_CHECKPOINT`, `PIPER_MODEL`, and `PROJECTS_DIR` environment variables.
 

@@ -7,3 +7,4 @@ export async function get(id:string){return JSON.parse(await fs.readFile(file(id
 export async function list(){await fs.mkdir(ROOT,{recursive:true});const dirs=await fs.readdir(ROOT);const all=await Promise.all(dirs.map(async d=>{try{return await get(d)}catch{return null}}));return all.filter(Boolean).sort((a:any,b:any)=>b.createdAt.localeCompare(a.createdAt))}
 export async function update(id:string,patch:Partial<Project>){const p=await get(id);return save({...p,...patch})}
 export async function log(id:string,message:string,level='info'){const p=await get(id);p.logs.push({time:new Date().toISOString(),message,level});return save(p)}
+export async function remove(id:string){await fs.rm(path.join(ROOT,id),{recursive:true,force:true})}
