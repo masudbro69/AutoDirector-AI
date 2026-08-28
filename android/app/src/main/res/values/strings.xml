@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AutoDirector AI</string>
+    <string name="title_activity_main">AutoDirector AI</string>
+    <string name="package_name">ai.autodirector.studio</string>
+    <string name="custom_url_scheme">ai.autodirector.studio</string>
+</resources>
