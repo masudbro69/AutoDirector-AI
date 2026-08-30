@@ -7,5 +7,6 @@ On startup, the engine prints a random six-digit pairing code. The Android contr
 - For remote access, use Tailscale/WireGuard and HTTPS termination.
 - `DISABLE_AUTH=true` is intended only for isolated development.
 - Asset paths are normalized and restricted to their owning project directory.
+- `/api/youtube/analyze` is paired-token protected, only constructs requests to `youtube.com` from a validated 11-character video ID, and caps pasted transcripts at 200 KB — it cannot be used as an SSRF proxy to arbitrary hosts.
 
 A future multi-user deployment should replace in-memory sessions with hashed, expiring tokens, device revocation, TLS, user accounts, and project-level authorization.

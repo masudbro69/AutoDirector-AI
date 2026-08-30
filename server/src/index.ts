@@ -1,13 +1,166 @@
-import express from 'express';import cors from 'cors';import crypto from 'node:crypto';import path from 'node:path';import fs from 'node:fs/promises';import { z } from 'zod';import { health } from './providers.js';import { get,list,ROOT,save,update } from './store.js';import { cancelPipeline,runPipeline } from './pipeline.js';import { auth,pair,revoke,showPairingCode } from './auth.js';
-const app=express();app.disable('x-powered-by');app.use(cors());app.use(express.json({limit:'2mb'}));
-app.get('/api/pairing/status',(_q,r)=>r.json({pairingRequired:process.env.DISABLE_AUTH!=='true',engine:'AutoDirector Local Engine'}));app.post('/api/pair',pair);app.use('/api',auth);app.post('/api/unpair',revoke);
-app.get('/api/health',async(_q,r)=>r.json({engine:true,...await health()}));app.get('/api/providers/health',async(_q,r)=>r.json(await health()));
-app.get('/api/projects',async(_q,r)=>r.json(await list()));app.get('/api/projects/:id',async(q,r)=>{try{r.json(await get(q.params.id))}catch{r.status(404).json({error:'Not found'})}});
-app.get('/api/projects/:id/progress',async(q,r)=>{try{const p=await get(q.params.id);r.json({id:p.id,status:p.status,stage:p.stage,progress:p.progress,error:p.error})}catch{r.status(404).json({error:'Not found'})}});
-app.get('/api/projects/:id/logs',async(q,r)=>{try{r.json((await get(q.params.id)).logs)}catch{r.status(404).json({error:'Not found'})}});
-app.post('/api/projects',async(q,r)=>{const schema=z.object({topic:z.string().min(3).max(4000),settings:z.object({duration:z.number().min(1).max(30).optional(),language:z.string().optional(),style:z.string().optional(),aspectRatio:z.enum(['16:9','9:16','1:1']).optional()}).default({})});const parsed=schema.safeParse(q.body);if(!parsed.success)return r.status(400).json({error:parsed.error.flatten()});const id=crypto.randomUUID();const p=await save({id,topic:parsed.data.topic,settings:parsed.data.settings,status:'draft',progress:0,stage:'Ready to generate',createdAt:new Date().toISOString(),logs:[]});r.status(201).json(p)});
-app.post('/api/projects/:id/generate',async(q,r)=>{try{const p=await get(q.params.id);if(p.status==='running'||p.status==='queued')return r.status(409).json({error:'Project is already running'});await update(p.id,{status:'queued',stage:'Queued',progress:0,error:undefined});setImmediate(()=>runPipeline(p.id));r.status(202).json({id:p.id,status:'queued'})}catch{r.status(404).json({error:'Not found'})}});
-app.post('/api/projects/:id/cancel',async(q,r)=>{try{await get(q.params.id);cancelPipeline(q.params.id);await update(q.params.id,{status:'cancelled',stage:'Cancelling'});r.status(202).json({status:'cancelling'})}catch{r.status(404).json({error:'Not found'})}});
-app.get('/api/projects/:id/export',async(q,r)=>{try{const p=await get(q.params.id);if(!p.export)return r.status(409).json({error:'Export not ready'});r.download(path.resolve(p.export),`${p.topic.replace(/[^a-z0-9]+/gi,'-').slice(0,50)}.mp4`)}catch{r.status(404).json({error:'Not found'})}});
-app.get('/api/assets/:projectId/*asset',async(q,r)=>{try{const projectDir=path.resolve(ROOT,q.params.projectId);const parts=(q.params as any).asset as string[];const target=path.resolve(projectDir,...parts);if(!target.startsWith(projectDir+path.sep))return r.status(403).json({error:'Invalid path'});await fs.access(target);r.sendFile(target)}catch{r.status(404).json({error:'Asset not found'})}});
-app.use((e:any,_q:any,r:any,_n:any)=>{console.error(e);r.status(500).json({error:'Internal server error'})});const port=Number(process.env.PORT||8787);app.listen(port,'0.0.0.0',()=>{console.log(`AutoDirector local engine: http://0.0.0.0:${port}`);console.log(`PAIRING CODE: ${showPairingCode()}`)});
+import express from 'express';
+import cors from 'cors';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { z } from 'zod';
+import { health } from './providers.js';
+import { get, list, ROOT, save, update } from './store.js';
+import { cancelPipeline, runPipeline } from './pipeline.js';
+import { auth, pair, revoke, showPairingCode } from './auth.js';
+import { analyzeYouTube } from './youtube.js';
+
+const app = express();
+app.disable('x-powered-by');
+app.use(cors());
+app.use(express.json({ limit: '4mb' }));
+
+app.get('/api/pairing/status', (_q, r) =>
+  r.json({ pairingRequired: process.env.DISABLE_AUTH !== 'true', engine: 'AutoDirector Local Engine' })
+);
+app.post('/api/pair', pair);
+app.use('/api', auth);
+app.post('/api/unpair', revoke);
+
+app.get('/api/health', async (_q, r) => r.json({ engine: true, ...(await health()) }));
+app.get('/api/providers/health', async (_q, r) => r.json(await health()));
+
+/** YouTube ভিডিও অ্যানালাইসিস — transcript + structure/style insight + original production plan */
+app.post('/api/youtube/analyze', async (q, r) => {
+  const schema = z.object({
+    url: z.string().min(5).max(500),
+    transcript: z.string().max(200_000).optional(),
+    language: z.string().max(40).optional(),
+    duration: z.number().min(1).max(30).optional(),
+    style: z.string().max(80).optional(),
+  });
+  const parsed = schema.safeParse(q.body);
+  if (!parsed.success) return r.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const { data, analysis } = await analyzeYouTube(parsed.data);
+    r.json({
+      source: {
+        type: 'youtube',
+        videoId: data.videoId,
+        url: data.url,
+        title: data.title,
+        author: data.author,
+        lengthSeconds: data.lengthSeconds,
+        transcript: data.transcript,
+        transcriptSource: data.transcriptSource,
+        captionLanguage: data.captionLanguage,
+      },
+      analysis,
+    });
+  } catch (e: any) {
+    r.status(422).json({ error: e.message || 'YouTube analysis failed' });
+  }
+});
+
+app.get('/api/projects', async (_q, r) => r.json(await list()));
+app.get('/api/projects/:id', async (q, r) => {
+  try { r.json(await get(q.params.id)); } catch { r.status(404).json({ error: 'Not found' }); }
+});
+app.get('/api/projects/:id/progress', async (q, r) => {
+  try {
+    const p = await get(q.params.id);
+    r.json({ id: p.id, status: p.status, stage: p.stage, progress: p.progress, error: p.error });
+  } catch { r.status(404).json({ error: 'Not found' }); }
+});
+app.get('/api/projects/:id/logs', async (q, r) => {
+  try { r.json((await get(q.params.id)).logs); } catch { r.status(404).json({ error: 'Not found' }); }
+});
+
+app.post('/api/projects', async (q, r) => {
+  const schema = z.object({
+    topic: z.string().min(3).max(4000).optional(),
+    settings: z
+      .object({
+        duration: z.number().min(1).max(30).optional(),
+        language: z.string().optional(),
+        style: z.string().optional(),
+        aspectRatio: z.enum(['16:9', '9:16', '1:1']).optional(),
+      })
+      .default({}),
+    source: z
+      .object({
+        type: z.literal('youtube'),
+        videoId: z.string().min(5).max(20),
+        url: z.string().max(500),
+        title: z.string().max(300).optional(),
+        author: z.string().max(200).optional(),
+        lengthSeconds: z.number().min(0).max(100_000).optional(),
+        transcript: z.string().max(200_000).optional(),
+        transcriptSource: z.enum(['captions', 'manual']).optional(),
+        analysis: z.any().optional(),
+      })
+      .optional(),
+  });
+  const parsed = schema.safeParse(q.body);
+  if (!parsed.success) return r.status(400).json({ error: parsed.error.flatten() });
+  const { topic, settings, source } = parsed.data;
+  if (!topic && !source) return r.status(400).json({ error: 'Provide a topic or a YouTube source' });
+
+  const id = crypto.randomUUID();
+  const p = await save({
+    id,
+    topic: topic || source?.title || 'YouTube video production',
+    settings,
+    ...(source ? { source } : {}),
+    status: 'draft',
+    progress: 0,
+    stage: 'Ready to generate',
+    createdAt: new Date().toISOString(),
+    logs: [],
+  });
+  r.status(201).json(p);
+});
+
+app.post('/api/projects/:id/generate', async (q, r) => {
+  try {
+    const p = await get(q.params.id);
+    if (p.status === 'running' || p.status === 'queued') return r.status(409).json({ error: 'Project is already running' });
+    await update(p.id, { status: 'queued', stage: 'Queued', progress: 0, error: undefined });
+    setImmediate(() => runPipeline(p.id));
+    r.status(202).json({ id: p.id, status: 'queued' });
+  } catch { r.status(404).json({ error: 'Not found' }); }
+});
+
+app.post('/api/projects/:id/cancel', async (q, r) => {
+  try {
+    await get(q.params.id);
+    cancelPipeline(q.params.id);
+    await update(q.params.id, { status: 'cancelled', stage: 'Cancelling' });
+    r.status(202).json({ status: 'cancelling' });
+  } catch { r.status(404).json({ error: 'Not found' }); }
+});
+
+app.get('/api/projects/:id/export', async (q, r) => {
+  try {
+    const p = await get(q.params.id);
+    if (!p.export) return r.status(409).json({ error: 'Export not ready' });
+    r.download(path.resolve(p.export), `${p.topic.replace(/[^a-z0-9]+/gi, '-').slice(0, 50)}.mp4`);
+  } catch { r.status(404).json({ error: 'Not found' }); }
+});
+
+app.get('/api/assets/:projectId/*asset', async (q, r) => {
+  try {
+    const projectDir = path.resolve(ROOT, q.params.projectId);
+    const parts = (q.params as any).asset as string[];
+    const target = path.resolve(projectDir, ...parts);
+    if (!target.startsWith(projectDir + path.sep)) return r.status(403).json({ error: 'Invalid path' });
+    await fs.access(target);
+    r.sendFile(target);
+  } catch { r.status(404).json({ error: 'Asset not found' }); }
+});
+
+app.use((e: any, _q: any, r: any, _n: any) => {
+  console.error(e);
+  r.status(500).json({ error: 'Internal server error' });
+});
+
+const port = Number(process.env.PORT || 8787);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`AutoDirector local engine: http://0.0.0.0:${port}`);
+  console.log(`PAIRING CODE: ${showPairingCode()}`);
+});

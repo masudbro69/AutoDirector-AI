@@ -6,14 +6,14 @@ AutoDirector AI is a local-first, zero-API-cost production system. The Android a
 
 ## What currently works
 
-1. Topic and production settings are submitted from web/Android.
-2. Ollama creates strategy, script, scene narration, and cinematic prompts.
+1. Topic **or a YouTube URL** and production settings are submitted from web/Android.
+2. Ollama creates strategy, script, scene narration, and cinematic prompts. For a YouTube source, the engine fetches the video transcript (no API key), analyzes its structure/style/key points, and writes an **original** video in the same format — it never copies the source script.
 3. ComfyUI + SDXL generates a unique visual for every scene.
 4. Piper creates scene-level neural narration.
 5. FFmpeg synchronizes narration, applies cinematic motion, encodes clips, and creates the final MP4.
-6. Project state, logs, scene assets, and the export are persisted locally.
+6. Project state, logs, scene assets, the saved source transcript, and the export are persisted locally.
 
-The architecture is provider-neutral. See [FREE_MODELS.md](FREE_MODELS.md).
+The architecture is provider-neutral. See [FREE_MODELS.md](FREE_MODELS.md). A second tool lives in this repo: [kdp-app](kdp-app/README.md) — the **KDP Command Center**, a Bangla/English business-planning web app built from the Amazon KDP roadmap video.
 
 ## Requirements (local engine PC)
 
@@ -36,10 +36,30 @@ cd .. && npm install && npm run dev
 
 Engine API: `http://YOUR_PC_LAN_IP:8787`. Enter that address and the six-digit pairing code printed by the engine in the New Production screen. Android emulator may use `http://10.0.2.2:8787`. Phone and PC must be on the same trusted network; allow TCP 8787 through the PC firewall. Sessions use random 256-bit bearer tokens and are invalidated when the engine restarts. See [server/SECURITY.md](server/SECURITY.md).
 
+## YouTube → original video workflow
+
+1. In **New production**, paste a YouTube link (watch/shorts/youtu.be — any format).
+2. The controller shows a YouTube badge; press **Analyze video** — the engine fetches captions (`ytInitialPlayerResponse` → timedtext, with an innertube fallback; no API key), then Ollama returns: structure breakdown, key points, tone, CTA, plus an **original** scene-by-scene production plan in your chosen language.
+3. Review the plan in the modal, then **Generate production** — the normal pipeline renders it (SDXL visuals → Piper voice → FFmpeg edit). The source transcript is saved to the project folder as `source-transcript.txt`.
+4. If a video has no captions, paste the transcript manually in the modal — everything else works the same.
+
+Notes: analysis quality depends on `OLLAMA_MODEL` (qwen2.5:7b handles Bangla transcripts well); long transcripts are truncated for the 8k context. The generated script is always original wording inspired by the source's structure — never a copy.
+
+## KDP Command Center (separate tool)
+
+`kdp-app/` is a standalone local-first web app (React + Vite, no backend) that turns the Amazon KDP roadmap video into a working business system: income-goal calculator, niche scoring ("King of the Pond" rules), competitor analysis, a product pipeline with anti-copy-paste uniqueness checks, and a 6-month consistency roadmap. UI is Bangla + English.
+
+```bash
+cd kdp-app && npm install && npm run dev   # http://localhost:5174
+```
+
+See [kdp-app/README.md](kdp-app/README.md).
+
 ## Controller API
 
 - `POST /api/pair`
-- `POST /api/projects`
+- `POST /api/youtube/analyze` — `{ url, transcript?, language?, duration?, style? }` → source metadata + transcript + Ollama analysis (structure, key points, original production plan). Use `transcript` when a video has no captions.
+- `POST /api/projects` — `{ topic?, settings, source? }`; `source.type = 'youtube'` carries the analyzed video so the pipeline scripts from it
 - `POST /api/projects/:id/generate`
 - `GET /api/projects/:id`
 - `GET /api/projects/:id/progress`
